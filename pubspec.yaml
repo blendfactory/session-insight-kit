@@ -1,7 +1,9 @@
 name: session_insight_kit
 description: "A new Flutter package project."
 version: 0.0.1
-homepage:
+repository: https://github.com/blendfactory/session-insight-kit
+documentation: https://github.com/blendfactory/session-insight-kit#readme
+issue_tracker: https://github.com/blendfactory/session-insight-kit/issues
 
 environment:
   sdk: ^3.11.4
