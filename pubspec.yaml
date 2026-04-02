@@ -7,7 +7,7 @@ issue_tracker: https://github.com/blendfactory/session-insight-kit/issues
 
 environment:
   sdk: ^3.11.4
-  flutter: ">=1.17.0"
+  flutter: ^3.41.6
 
 dependencies:
   flutter:
