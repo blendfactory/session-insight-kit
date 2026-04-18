@@ -1,0 +1,201 @@
+---
+description: DDD and layered architecture for session_insight_kit; orchestration boundaries vs speech_kit and screen_capture_kit
+globs: lib/**/*.dart
+alwaysApply: false
+---
+
+# Architecture: DDD + Layered
+
+This project follows **Domain-Driven Design (DDD)** and a **layered architecture**, aligned with **`screen-capture-kit`** and **`speech-kit`** where layering helps, but centered on **this package’s bounded context**: **macOS meeting-style capture UX**, **orchestration**, and **normalized session facts** for the host app. Dependencies flow inward: outer layers depend on inner layers; the **domain** has no dependencies on other layers.
+
+**Sibling packages**: `session_insight_kit` **composes** [`speech_kit`](https://github.com/blendfactory/speech-kit) (on-device speech / `SpeechAnalyzer` pipeline) and [`screen_capture_kit`](https://github.com/blendfactory/screen-capture-kit) (ScreenCaptureKit). Their **native bridges and framework details stay inside those packages**. This repo’s **domain** models **session facts and lifecycle** that *this* package owns; it does **not** re-expose Apple framework types as domain concepts. Map framework and sibling-package outputs at **application** or **infrastructure** boundaries into **domain value objects**.
+
+**Out of scope for all layers**: host-owned **LLM calls**, **prompts**, **minutes templates**, and **summarization**. The public API may emit **structured payloads** the host serializes or passes to a model; the package does not bundle inference or “insights.”
+
+## Layer overview
+
+| Layer | Responsibility | Allowed to depend on |
+|-------|----------------|----------------------|
+| **Presentation / API** | Flutter capture/recording **widgets**, public exports, barrel | Application, Domain |
+| **Application** | Session use cases: orchestrate `speech_kit` + `screen_capture_kit`, map streams to domain, emit session bundle | Domain, (optional) ports / infrastructure interfaces |
+| **Domain** | Session identity, timeline, transcript segments (normalized), artifact references, session events, domain errors | Nothing (pure Dart; no `dart:io` / `dart:ffi` / platform / Flutter) |
+| **Infrastructure** | Adapters to sibling packages, platform glue, `MethodChannel` / FFI **only if** not already covered by `speech_kit` / `screen_capture_kit` | Domain, Application (implements ports) |
+
+**Note**: “Presentation” includes **library UI** presented to the app (widgets and affordances), not only type-only “API contract” surfaces. **Domain** remains Flutter-free so session logic and types stay testable without binding to widgets.
+
+**Intended use cases**: Meeting-style **display or window** capture, **audio path** selection within platform limits, **clear recording state**, **multiplexed or demuxed** outputs (host-selectable), and **downstream-ready** artifacts plus a **consistent time base** for transcript segments and events. See the repository README (`package vs host`, session flow, and “analysis foundation” sections).
+
+## Consumer guidance (Flutter apps on macOS)
+
+- **Entry point**: Prefer one import `package:session_insight_kit/session_insight_kit.dart` and a facade such as **`SessionInsightKit`** (name may evolve with the first public API).
+- **Typical flow**: configure **sources and output mode** → **start session** → consume **normalized segment and session events** during recording → **stop** → receive **artifact paths and session bundle** suitable for host pipelines. Use `try/finally` or `async` cleanup so underlying capture and speech sessions always end deterministically (delegate teardown rules to the sibling packages where applicable).
+- **DI and testing**: Inject the facade or application ports; substitute fakes for **session lifecycle** and **stream mapping** without spinning real capture/speech.
+- **Platform and errors**: **macOS only** for the intended capture model; on unsupported contexts, throw **`UnsupportedError`**. Map permission, capture, and analyzer failures to a **`SessionInsightKitException`** (or equivalent **domain** error) at the boundary—do not leak raw framework error types from the public surface.
+
+## Dependency rule (Mermaid)
+
+```mermaid
+flowchart TB
+  subgraph Outer["Outer layers"]
+    P["Presentation / API\n(Flutter widgets, barrel, exports)"]
+    A["Application\n(session use cases, facade)"]
+  end
+  subgraph Inner["Inner layers"]
+    D["Domain\n(session facts, segments, events)"]
+    I["Infrastructure\n(sibling adapters, platform glue)"]
+  end
+
+  P --> A
+  P --> D
+  A --> D
+  I --> D
+  I -.->|implements| A
+
+  style D fill:#e8f5e9
+  style A fill:#e3f2fd
+  style I fill:#fff3e0
+  style P fill:#f3e5f5
+```
+
+**Rule**: Domain is innermost. Domain code must not import application, infrastructure, or presentation—or **`speech_kit` / `screen_capture_kit`** packages. **Application** orchestrates sibling packages **through infrastructure ports** (recommended) or thin adapters so orchestration logic stays testable.
+
+## Layer dependency diagram (simplified)
+
+```mermaid
+flowchart LR
+  subgraph layers
+    direction TB
+    L4["4. Presentation"]
+    L3["3. Application"]
+    L2["2. Domain"]
+    L1["1. Infrastructure"]
+  end
+  L4 --> L3
+  L3 --> L2
+  L1 --> L2
+  L3 -.->|uses via ports| L1
+```
+
+## Target package layout (`lib/`)
+
+Exact filenames will evolve with the first implementation; **dependency direction** matters more than names.
+
+```mermaid
+flowchart TB
+  subgraph lib["lib/"]
+    barrel["session_insight_kit.dart\n(barrel, exports)"]
+    subgraph src["src/"]
+      subgraph domain["domain/"]
+        d_values["value_objects: session id, time ranges,\ntranscript segments, artifact refs"]
+        d_events["session_event, session_bundle\n(normalized factual outputs)"]
+        d_errors["errors/session_insight_kit_exception"]
+      end
+      subgraph application["application/"]
+        app_service["session_insight_kit.dart\n(facade / application service)"]
+        app_ports["ports/\n(capture, speech, clock,\noptional)"]
+      end
+      subgraph infrastructure["infrastructure/"]
+        impl_speech["adapters delegating to speech_kit"]
+        impl_sc["adapters delegating to screen_capture_kit"]
+        impl_stub["unsupported_platform_stub.dart"]
+      end
+      subgraph presentation["presentation/"]
+        widgets["widgets/: capture & recording UI"]
+        api_types["public config / session types as needed"]
+      end
+    end
+  end
+  barrel --> app_service
+  barrel --> domain
+  barrel --> presentation
+  app_service --> domain
+  app_service --> app_ports
+  impl_speech --> domain
+  impl_speech --> app_ports
+  impl_sc --> domain
+  impl_sc --> app_ports
+  impl_stub --> domain
+  presentation --> domain
+  presentation --> app_service
+```
+
+Suggested directory structure:
+
+```
+lib/
+  session_insight_kit.dart       # Barrel: export intended public API only
+  src/
+    domain/
+      value_objects/
+        identifiers/             # e.g. session id (extension types)
+        time/                    # consistent timeline / offsets
+        transcript/              # normalized segments (text, ranges, confidence when available)
+        artifacts/               # paths, optional checksums, mux/demux mode
+      errors/
+        session_insight_kit_exception.dart
+    application/
+      session_insight_kit.dart   # Facade / application service
+      ports/                     # Speech, capture, session clock—keep seams for tests
+    infrastructure/
+      ...                        # Wrap speech_kit / screen_capture_kit; avoid duplicating their native stacks
+      session_insight_kit_stub.dart
+    presentation/
+      widgets/                   # Recording UX: source selection affordances, state, etc.
+```
+
+## Domain model (aggregate, entities, value objects)
+
+When **`doc/domain-model.md`** exists, treat it as the detailed source of truth. Until then, align with the README: one **session** is the natural **consistency boundary**—from **configure** through **stop**, producing **artifacts** and a **session bundle** of **facts** (provenance, timeline, segments, events).
+
+- **Aggregate root (conceptual)**: **`RecordingSession`** (name TBD)—**lifecycle** and **correlation id** for everything emitted in one run: capture, speech-derived segments, and artifact catalog **as modeled by this package**.
+- **Entities**: Prefer **value-object-heavy** design initially; add entities only when a concept needs **stable identity** beyond the session (e.g. long-lived user preferences might live in the **host**, not this package).
+- **Value objects**: **Extension types** for opaque handles (e.g. **`SessionId`**); **immutable classes** for **transcript segments**, **time ranges**, **artifact references**, and **session events**. These types describe **what was recorded and derived**, not **why** or **what the host should ask an LLM**.
+
+## Domain context (DDD)
+
+```mermaid
+flowchart LR
+  subgraph BoundedContext["Session insight (facts for the host)"]
+    subgraph Aggregate["Aggregate root (conceptual)"]
+      RS["RecordingSession"]
+    end
+    subgraph VOs["Value objects"]
+      SID["SessionId"]
+      SEG["TranscriptSegment, time base"]
+      ART["ArtifactRef, output mode"]
+      EVT["SessionEvent"]
+      BND["SessionBundle / export DTO"]
+    end
+  end
+  RS --> SID
+  RS -.->|yields| SEG
+  RS -.->|yields| ART
+  RS -.->|yields| EVT
+  RS -.->|completes with| BND
+```
+
+**Sibling bounded contexts**: `speech_kit` and `screen_capture_kit` remain separate; **this** package’s domain **does not** subclass their internals—it **maps** into the session facts above.
+
+## Conventions
+
+1. **Domain**: No `dart:io`, `dart:ffi`, Flutter, or imports of **`speech_kit`** / **`screen_capture_kit`**. Pure Dart types and domain exceptions.
+2. **Application**: Orchestrates **start / stop**, **merges streams** into **domain** updates, and builds **session bundle** outputs. Prefer **ports** implemented in infrastructure for **`SpeechKit`**, **`ScreenCaptureKit`**, and clocks.
+3. **Infrastructure**: **Delegates** to sibling packages for SpeechAnalyzer and ScreenCaptureKit concerns; add code here only for **glue** this repo must own (e.g. composing two native stacks in one user action). Map all external results to **domain** value objects at the boundary.
+4. **Presentation**: **Widgets** and exported types; **no** LLM or prompt logic; **no** embedding third-party URL fetchers or media players—**how** media enters the session stays in the **host** (README: content origins).
+5. **Imports**: Inner layers never import outer layers. Use **dependency inversion** (ports in application, implementations in infrastructure).
+6. **Privacy and prompts**: Structured outputs are **facts** and **handles** for the host; **never** ship default prompt templates or “insight” generation inside this package.
+
+## Refactoring checklist
+
+When shaping code toward this architecture:
+
+- [ ] Assign each file to **domain / application / infrastructure / presentation**.
+- [ ] Keep **domain** free of **Flutter** and sibling-package imports; fix imports to respect the dependency rule.
+- [ ] Introduce or refine **ports** where **`speech_kit`** and **`screen_capture_kit`** are composed so tests can substitute fakes.
+- [ ] Keep **`session_insight_kit.dart`** exporting only the intended public surface.
+- [ ] Document **session lifecycle** (start/stop, error surfaces, artifact delivery) in API docs and README; align teardown with **sibling package** requirements (filters released, analyzers finalized, etc.).
+- [ ] Add **`doc/domain-model.md`** when aggregate and value-object names stabilize, and link it from this rule.
+
+## Design review
+
+Layering matches the **orchestration + facts** role of this package: **`speech_kit`** and **`screen_capture_kit`** own their native stacks; **`session_insight_kit`** owns **session-shaped** domain types, **UX**, and **normalized outputs** for apps that attach **their own** LLM and policy layers in the host.
