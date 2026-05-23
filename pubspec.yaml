@@ -6,8 +6,8 @@ documentation: https://github.com/blendfactory/session-insight-kit#readme
 issue_tracker: https://github.com/blendfactory/session-insight-kit/issues
 
 environment:
-  sdk: ^3.11.5
-  flutter: ^3.41.7
+  sdk: ^3.12.0
+  flutter: ^3.44.0
 
 dependencies:
   flutter:
