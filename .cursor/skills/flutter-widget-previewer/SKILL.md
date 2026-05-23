@@ -109,6 +109,40 @@ Structure **conditional imports** if platform code must coexist with previews ([
 3. Run **`flutter widget-preview start`** (or use the IDE preview tab) and confirm light/dark if relevant.
 4. If a preview **fails to load**, check for **`dart:io`**, **FFI**, or **native plugins** in the transitive import graph and split **stub** UI.
 
+## Troubleshooting (IDE errors, daemon timeouts)
+
+### `emulator.getEmulators` / Flutter daemon timeout (e.g. 20000ms)
+
+If the log shows:
+
+```text
+Request "emulator.getEmulators" to daemon was not responded to within 20000ms
+```
+
+this is a **Flutter daemon ↔ editor** issue, not proof that `@Preview` code is wrong. The Dart & Flutter extension asks the daemon for the **Android emulator list**; if that call stalls (slow/hung Android SDK tools, first-run locks on `flutter`, or daemon load), the **same daemon** also backs **Widget Preview** in the IDE, so the preview panel can fail even though previews compile.
+
+**Mitigations (try in order):**
+
+1. **CLI preview (bypasses the IDE panel)** — from the package/app root:
+
+   ```bash
+   flutter widget-preview start
+   ```
+
+   Opens the preview environment in **Chrome**; use this when the sidebar preview is broken.
+
+2. **Restart Flutter tooling in the editor** — e.g. **Dart: Restart Analysis Server**, **Restart Extension Host**, or reload the window; or use the prompt’s **Restart Extension** if shown.
+
+3. **Diagnose Android / emulator tools** — ensure `flutter doctor` is clean; if `emulator` or `sdkmanager` hangs on your machine, fix PATH / Android SDK (stalled emulator enumeration can contribute to daemon backlog).
+
+4. **Separate daemon log (VS Code / compatible editors)** — set `dart.flutterDaemonLogFile` to a path and restart; when the timeout happens, capture **FlutterDaemon** lines and see [Dart-Code #5793](https://github.com/Dart-Code/Dart-Code/issues/5793).
+
+**Note:** `flutter create --platforms=web` is **not** supported for the **package** template; rely on **`flutter widget-preview start`** and IDE support for packages as documented in current Flutter releases.
+
+### Preview widget fails to render / red error in preview frame
+
+Then investigate **web-only limits** (see **Restrictions** above) and transitive imports of **`dart:io`** / **FFI** / native plugins.
+
 ## Related
 
 - API: [`Preview` class](https://api.flutter.dev/flutter/widget_previews/Preview-class.html)
